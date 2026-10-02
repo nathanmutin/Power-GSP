@@ -1,0 +1,29 @@
+run:
+  name: power_gsp
+
+clustering:
+  # Pas de clustering pour le moment, on garde tous les nodes
+  cluster_network:
+    n_clusters: all
+  # On garde aussi les nodes qui n'ont qu'une seule ligne de transmission connectée (stubs)
+  simplify_network:
+    remove_stubs: false
+
+# On ne veut pas de projets de transmission dans le réseau
+transmission_projects:
+  enable: false
+
+# On ne veut pas de projets de stockage dans le réseau
+load:
+  supplement_synthetic: false
+
+electricity:
+  renewable_carriers: []
+  estimate_renewable_capacities:
+    enable: false
+  extendable_carriers:
+    Generator: []
+    StorageUnit: []
+    Store: []
+    Link: []
+  powerplants_filter: "(DateOut > 2025 or DateOut != DateOut) and (DateIn < 2026 or DateIn != DateIn)"

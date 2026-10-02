@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code : réglages propres à chaque machine (chemin absolu de l'interpréteur)
+.vscode/
