@@ -7,6 +7,9 @@
 | `pypsa-eur` | Clone de pypsa-eur |
 | `pypsa-eur/resources`  | Données téléchargées depuis pypsa-eur |
 | `config` | Fichiers de configuration pour le télécargement des données |
+| `doc.md` | Aspect théorique du modèle |
+| `run.ipynb` | Notebook pour exécuter le modèle |
+| `utils` | Fonctions utilitaires pour le traitement des données |
 
 
 ## Installation (Windows)
@@ -24,11 +27,6 @@ Dans VS Code, choisir le noyau `pypsa-eur\.pixi\envs\dev\python.exe` pour les no
 
 ```bash
 cd pypsa-eur
-mv config/build_powerplants.py pypsa-eur/scripts/build_powerplants.py
+cp ../config/build_powerplants.py scripts/build_powerplants.py
 pixi run -e dev snakemake --cores 4 resources/power_gsp/networks/base.nc  resources/power_gsp/powerplants.csv --configfile ../config/pypsa-eur.yaml
-```
-
-## Tests
-```bash
-pixi run --manifest-path pypsa-eur/pixi.toml -e dev python -m pytest
 ```

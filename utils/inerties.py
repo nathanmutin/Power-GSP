@@ -1,8 +1,9 @@
 """
-Constantes d'inertie pour différentes technologies de production d'énergie.
-et une fonction pour obtenir la constante d'inertie H pour une technologie
-et un type de combustible donnés.
+Constantes d'inertie H des différentes technologies de production,
+et fonction donnant H pour une technologie et un type de combustible.
 """
+
+import pandas as pd
 
 # https://eepublicdownloads.entsoe.eu/clean-documents/SOC%20documents/Inertia%20and%20RoCoF_v17_clean.pdf
 INERTIA_CONSTANTS = {
@@ -84,20 +85,16 @@ TECHNOLOGY_FUELTYPE_MAPPING = {
     "nan_Mechanical Storage": "other",
 }
 
-def get_inertia_constant(technology, fueltype):
+def get_inertia_constants(technology: pd.Series, fueltype: pd.Series) -> pd.Series:
     """
-    Retourne la constante d'inertie H pour une technologie et un type de combustible donnés.
-    
-    Args:
-        technology (str): Technologie de production d'énergie.
-        fueltype (str): Type de combustible utilisé.
-    
-    Returns:
-        float: Constante d'inertie H correspondante.
+    Version vectorisée de get_inertia_constant : H pour chaque centrale.
+    Les combinaisons inconnues prennent la valeur de 'other', avec un seul message récapitulatif.
     """
-    key = TECHNOLOGY_FUELTYPE_MAPPING.get(f"{technology}_{fueltype}")
-    if key is None:
-        print(f"Technologie ou type de combustible inconnu : {technology}_{fueltype}. Utilisation de la valeur par défaut.")
-        return INERTIA_CONSTANTS["other"]
-        
-    return INERTIA_CONSTANTS[key]
+    # fillna : les valeurs manquantes donnent les clés "nan_..." du dictionnaire
+    combos = technology.fillna("nan").astype(str) + "_" + fueltype.fillna("nan").astype(str)
+    keys = combos.map(TECHNOLOGY_FUELTYPE_MAPPING)
+    unknown = keys.isna()
+    if unknown.any():
+        print(f"Combinaisons inconnues, H par défaut ({INERTIA_CONSTANTS['other']} s) :\n"
+              f"{combos[unknown].value_counts()}")
+    return keys.map(INERTIA_CONSTANTS).fillna(INERTIA_CONSTANTS["other"])

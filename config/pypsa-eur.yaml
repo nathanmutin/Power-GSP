@@ -13,7 +13,6 @@ clustering:
 transmission_projects:
   enable: false
 
-# On ne veut pas de projets de stockage dans le réseau
 load:
   supplement_synthetic: false
 

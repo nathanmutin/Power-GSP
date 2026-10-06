@@ -7,3 +7,6 @@ __pycache__/
 
 # VS Code : réglages propres à chaque machine (chemin absolu de l'interpréteur)
 .vscode/
+
+# Animations générées par le notebook
+oscillations.gif

@@ -12,7 +12,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from utils import paths
-from utils.inerties import get_inertia_constant
+from utils.inerties import get_inertia_constants
 from utils.network import remove_non_synchronous_areas
 
 F_NOMINAL = 50.0                    # Fréquence nominale (Hz)
@@ -25,7 +25,8 @@ class Grid:
 
     L'index de `buses` fixe l'ordre des nœuds : les matrices (incidence, laplacien, inertie)
     et les signaux sous forme de np.ndarray suivent tous cet ordre.
-    Ne pas réordonner ni filtrer `buses` après création (les matrices sont mises en cache).
+    Les matrices et les modes sont mis en cache : après toute modification de `buses`
+    ou `branches`, appeler invalidate_cache().
 
     Unités : PyPSA exprime x_pu sur une base de 1 MVA, donc b = 1/x_pu est en MW/rad
     et les puissances (ΔP...) sont en MW.
@@ -93,7 +94,7 @@ class Grid:
         Les centrales dont le bus n'est pas dans le réseau (zones non synchrones) sont ignorées.
         """
         plants = pd.read_csv(path_to_powerplants_csv)
-        plants["H"] = [get_inertia_constant(t, f) for t, f in zip(plants.Technology, plants.Fueltype)]
+        plants["H"] = get_inertia_constants(plants.Technology, plants.Fueltype)
         plants["E"] = plants.H * plants.Capacity
 
         in_grid = plants.bus.isin(self.buses.index)
@@ -105,8 +106,13 @@ class Grid:
         self.buses["S"] = per_bus.Capacity
         self.buses["E"] = per_bus.E
         self.buses["H"] = (per_bus.E / per_bus.Capacity).where(per_bus.Capacity > 0, 0.0)
-        # Les modes dépendent de M : invalider le cache s'il existe
-        self.__dict__.pop("_modes_computation", None)
+        # Les modes dépendent de M
+        self.invalidate_cache()
+
+    def invalidate_cache(self):
+        """Vide les matrices et modes mis en cache. À appeler après toute modification de buses ou branches."""
+        for name in ("incidence", "L", "_modes_computation"):
+            self.__dict__.pop(name, None)
 
     @cached_property
     def incidence(self) -> sp.csr_array:
@@ -131,7 +137,7 @@ class Grid:
         """
         Matrice d'inertie diagonale M = diag(2 E / ω_s) (bus x bus), en MW·s²/rad.
         Cohérente avec L dans l'équation d'oscillation M δ'' + L δ = ΔP.
-        Non mise en cache : suit les colonnes E de buses si add_inertia est rappelée.
+        Non mise en cache : suit toujours la colonne E de buses.
         """
         if "E" not in self.buses:
             raise AttributeError("Inerties absentes : appeler add_inertia d'abord.")
@@ -148,9 +154,9 @@ class Grid:
             L_red = L_gg − L_gl L_ll⁻¹ L_lg          (laplacien réduit)
             P_red = ΔP_g − L_gl L_ll⁻¹ ΔP_l          (perturbation reportée sur les nœuds avec inertie)
         Le système réduit M_g δ_g'' + L_red δ_g = P_red est diagonalisé par le problème aux valeurs
-        propres généralisé L_red v = λ M_g v, dont les modes vérifient Vᵀ M_g V = I.
+        propres généralisé L_red v = λ M_g v, dont les modes vérifient Vᵀ M_g V = I et Vᵀ L_red V = Λ.
 
-        Calculé une fois, au premier accès (invalidé par add_inertia).
+        Calculé une fois, au premier accès (vidé par invalidate_cache, appelée par add_inertia).
         """
         m = self.M.diagonal()
         g = m > 0
@@ -200,10 +206,10 @@ class Grid:
         """
         Réponse à un échelon de puissance ΔP appliqué à t = 0, à partir de l'équilibre (δ = δ' = 0).
 
-        En coordonnées modales q = Vᵀ M_g δ_g, chaque mode est un oscillateur q_k'' + λ_k q_k = p_k,
-        avec p = Vᵀ P_red :
-            mode 0     : q_0 = p_0 t² / 2                       (dérive du centre d'inertie)
-            modes k ≥ 1 : q_k = p_k / λ_k · (1 − cos ω_k t)
+        En coordonnées modales δ̂ = Vᵀ M_g δ_g, chaque mode est un oscillateur δ̂_k'' + λ_k δ̂_k = â_k,
+        avec â = Vᵀ M_g a = Vᵀ P_red (a = M_g⁻¹ P_red, accélération imposée) :
+            mode 0     : δ̂_0 = â_0 t² / 2                       (dérive du centre d'inertie)
+            modes k ≥ 1 : δ̂_k = â_k / λ_k · (1 − cos ω_k t)
 
         Args:
             delta_P: Perturbation (MW) par nœud, pd.Series indexée par bus ou tableau dans l'ordre de buses.
@@ -222,19 +228,20 @@ class Grid:
 
         # Perturbation reportée sur les nœuds avec inertie, puis projetée sur les modes
         Lll_inv_P_l = s["lu_ll"].solve(dP[l])
-        p = s["modes"].T @ (dP[g] - s["L_gl"] @ Lll_inv_P_l)
+        a_hat = s["modes"].T @ (dP[g] - s["L_gl"] @ Lll_inv_P_l)
 
         lam = s["eigenvalues"][1:, None]
         omega = np.sqrt(lam)
-        q = np.empty((len(p), len(t)))
-        dq = np.empty((len(p), len(t)))
-        q[0], dq[0] = p[0] * t**2 / 2, p[0] * t
-        q[1:] = p[1:, None] / lam * (1 - np.cos(omega * t))
-        dq[1:] = p[1:, None] / omega * np.sin(omega * t)
+        d_hat = np.empty((len(a_hat), len(t)))
+        dd_hat = np.empty((len(a_hat), len(t)))
+        d_hat[0] = a_hat[0] * t**2 / 2
+        dd_hat[0] = a_hat[0] * t
+        d_hat[1:] = a_hat[1:, None] / lam * (1 - np.cos(omega * t))
+        dd_hat[1:] = a_hat[1:, None] / omega * np.sin(omega * t)
 
         delta = np.empty((len(dP), len(t)))
         speed = np.empty((len(dP), len(t)))
-        delta[g], speed[g] = s["modes"] @ q, s["modes"] @ dq
+        delta[g], speed[g] = s["modes"] @ d_hat, s["modes"] @ dd_hat
         # Nœuds sans inertie : relation algébrique (ΔP constant pour t > 0)
         delta[l] = Lll_inv_P_l[:, None] - s["kron"] @ delta[g]
         speed[l] = -s["kron"] @ speed[g]
@@ -246,6 +253,10 @@ class Grid:
     def to_array(self, values) -> np.ndarray:
         """Signal dans l'ordre de buses (accepte une pd.Series indexée par bus ou un tableau)."""
         if isinstance(values, pd.Series):
+            missing = self.buses.index.difference(values.index)
+            if len(missing):
+                raise ValueError(f"{len(missing)} bus absents du signal, "
+                                 f"par ex. {list(missing[:5])}")
             return values.reindex(self.buses.index).to_numpy()
         values = np.asarray(values)
         if len(values) != len(self.buses):

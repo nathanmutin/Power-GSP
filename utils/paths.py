@@ -1,4 +1,4 @@
-"""Chemins du projet : sorties du workflow PyPSA-Eur et dossiers de GSP2."""
+"""Chemins du projet : sorties du workflow PyPSA-Eur (run power_gsp)."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

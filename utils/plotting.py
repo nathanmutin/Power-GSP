@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import matplotlib.axes
+from matplotlib.animation import FuncAnimation
 from matplotlib.collections import LineCollection
 from matplotlib.colors import CenteredNorm, LinearSegmentedColormap, Normalize
 from matplotlib.lines import Line2D
@@ -45,21 +45,21 @@ def draw_branches(ax, buses, branches, color, linewidth=0.6, zorder=1, label=Non
     collection = LineCollection(segments(buses, branches.bus0, branches.bus1), colors=color,
                                 linewidths=linewidth, zorder=zorder, label=label, capstyle="round")
     ax.add_collection(collection)
-    
+
     return collection
 
 
 def draw_network(ax, network, shapes):
     """
     Carte du réseau électrique : lignes et liaisons HVDC sur fond de pays.
-    
+
     Args:
         ax (matplotlib.axes.Axes): Axes de la figure.
         network (pypsa.Network): Réseau PyPSA.
         shapes (geopandas.GeoDataFrame): Formes des pays.
     """
     base_map(ax, shapes)
-    
+
     # Trier les lignes par tension croissante pour un affichage plus esthétique
     lines = network.lines.sort_values(by="v_nom")
     buses = network.buses
@@ -76,7 +76,7 @@ def draw_network(ax, network, shapes):
         zorder=1,
     )
     draw_branches(ax, buses, hvdc, SERIES[1], linewidth=1.6, zorder=6)
-    
+
     # Jolie légende
     voltage_values = [lines.v_nom.min(), 220, 380, 400, lines.v_nom.max()]
     # Supprimer les doublons et les valeurs en dehors de la plage de tension du réseau
@@ -96,9 +96,9 @@ def draw_network(ax, network, shapes):
     )
     if len(hvdc):
         legend_handles.append(Line2D([0], [0], color=SERIES[1], linewidth=1.6,
-                                    label=f"HVDC"))
+                                    label="HVDC"))
     ax.legend(handles=legend_handles, title="Lignes", loc="upper left")
-    
+
     # Cropping de la carte pour ne pas aller au-delà des limites du réseau
     xmin, xmax = buses.x.min() - 1, buses.x.max() + 1
     ymin, ymax = buses.y.min() - 1, buses.y.max() + 1
@@ -117,19 +117,56 @@ def draw_graph(ax, grid, shapes):
     return ax
 
 
-def draw_graph_signals(ax, grid, values, shapes, norm: Normalize = None, cmap='coolwarm'):
-    """Signal sur les nœuds du réseau, représenté par la couleur des nœuds."""
+def draw_graph_signals(ax, grid, values, shapes, norm: Normalize = None, cmap='coolwarm',
+                       label: str = None):
+    """
+    Signal sur les nœuds du réseau, représenté par la couleur des nœuds.
+    Si label est donné, ajoute une barre de couleur avec ce titre.
+    Renvoie le scatter, utilisable pour une barre commune : fig.colorbar(sc, ax=axes).
+    """
     draw_graph(ax, grid, shapes)
     # Une nouvelle normalisation par appel : une CenteredNorm partagée garderait l'échelle du premier signal
     norm = CenteredNorm() if norm is None else norm
-    ax.scatter(grid.buses.x, grid.buses.y, c=grid.to_array(values), norm=norm, cmap=cmap,
-               s=2, zorder=2)
-    
-    # Create a colorbar
-    """sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.set_label('Signal Value', rotation=270, labelpad=15)"""
+    sc = ax.scatter(grid.buses.x, grid.buses.y, c=grid.to_array(values), norm=norm, cmap=cmap,
+                    s=2, zorder=2)
+    if label is not None:
+        ax.figure.colorbar(sc, ax=ax, label=label, shrink=0.6)
+    return sc
+
+
+def animate_graph_signals(grid, signals, shapes, norm: Normalize = None, cmap='coolwarm',
+                          label: str = None, interval: int = 50, figsize=(8, 6)):
+    """
+    Animation d'un signal temporel sur les nœuds du réseau, représenté par la couleur des nœuds.
+
+    Args:
+        signals (pd.DataFrame): Bus x instants, comme renvoyé par Grid.step_response.
+        norm: Normalisation commune à toutes les images. Par défaut, centrée sur 0
+            avec pour demi-amplitude le 99e percentile de |signal| sur toute la durée
+            (les valeurs au-delà saturent la couleur).
+        label (str): Titre de la barre de couleur.
+        interval (int): Durée d'une image (ms).
+
+    Returns:
+        FuncAnimation : dans un notebook, HTML(anim.to_jshtml()) ;
+        dans un fichier, anim.save("oscillations.gif", writer="pillow").
+    """
+    values = np.column_stack([grid.to_array(signals[c]) for c in signals.columns])
+    times = signals.columns.to_numpy()
+    # 99e percentile : quelques nœuds extrêmes ne doivent pas écraser l'échelle
+    norm = CenteredNorm(halfrange=np.percentile(np.abs(values), 99)) if norm is None else norm
+
+    fig, ax = plt.subplots(figsize=figsize)
+    sc = draw_graph_signals(ax, grid, values[:, 0], shapes, norm=norm, cmap=cmap, label=label)
+
+    def update(i):
+        sc.set_array(values[:, i])
+        ax.set_title(f"t = {times[i]:.2f} s")
+        return sc,
+
+    anim = FuncAnimation(fig, update, frames=len(times), interval=interval)
+    plt.close(fig)   # sinon le notebook affiche aussi une image fixe
+    return anim
 
 
 def draw_graph_signals_area(ax, grid, values, shapes):

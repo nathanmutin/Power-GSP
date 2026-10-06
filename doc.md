@@ -1,4 +1,8 @@
-## Représentation du réseau
+# Modèle dynamique du réseau électrique
+
+## Modélisation
+
+### Représentation du réseau
 
 On considère un nœud $`i`$ connecté à ses voisins $`j`$, avec :
 - admittances de ligne $`\underline{Y}_{ij} \space [\Omega^{-1}]`$
@@ -27,8 +31,8 @@ Ainsi
 \underline{I}_i = \left(\underline{Y}_{i0} + \sum_{j\neq i} \underline{Y}_{ij}\right)\underline{V}_i - \sum_{j\neq i} \underline{Y}_{ij}\underline{V}_j
 ```
 
-### Simplification et notation matricielle
-On suppose que les pertes dans les lignes sont négligeables, ainsi $`\underline{Y}_{ij} = - j \frac{1}{X_{ij}}`$ et $`\underline{Y}_{i0} = - j \frac{1}{X_{i0}}`$ avec $`X_{ij}`$ et $`X_{i0}`$ les réactances de ligne et de terre. Ainsi
+#### Simplification et notation matricielle
+On suppose que les pertes dans les lignes sont négligeables, ainsi $`\underline{Y}_{ij} = - j \frac{1}{X_{ij}}`$ avec $`X_{ij}`$ la réactance de ligne, et $`\underline{Y}_{i0} = j B_{i0}`$ avec $`B_{i0}`$ la susceptance shunt au nœud (positive, car essentiellement due à la capacité des lignes par rapport à la terre). Ainsi
 
 ```math
 [I]=[Y][V]
@@ -37,10 +41,10 @@ On suppose que les pertes dans les lignes sont négligeables, ainsi $`\underline
 avec
 
 ```math
-[Y]_{ii}= j \space \underbrace{\left(-\frac{1}{X_{i0}}-\sum_{j\neq i} \frac{1}{X_{ij}}\right)}_{= B_{ii}}, \qquad [Y]_{ij}=j \space \underbrace{\frac{1}{X_{ij}}}_{= B_{ij}}
+[Y]_{ii}= j \space \underbrace{\left(B_{i0}-\sum_{j\neq i} \frac{1}{X_{ij}}\right)}_{= B_{ii}}, \qquad [Y]_{ij}=j \space \underbrace{\frac{1}{X_{ij}}}_{= B_{ij}}
 ```
 
-## Puissance injectée
+### Puissance injectée
 
 La puissance apparente injectée au nœud $`i`$ vaut:
 
@@ -61,7 +65,7 @@ P_i
 \end{aligned}
 ```
 
-## Grandeurs per unit
+### Grandeurs per unit
 
 Pour modéliser l'ensemble du réseau, on ramène chaque grandeur électrique à une grandeur sans dimension (per unit) en prenant pour référence les grandeurs nominales de chaque sous-système (ligne, transformateur, générateur).
 
@@ -82,7 +86,7 @@ Exprimée en per unit, la puissance réelle injectée au nœud $`i`$ est :
 p_i = \sum_j v_i v_j b_{ij}\sin(\theta_i-\theta_j)
 ```
 
-## Nœuds générateurs
+### Nœuds générateurs
 
 On part de la seconde loi de Newton appliquée à une machine tournante
 
@@ -138,11 +142,11 @@ La puissance mécanique est, elle, fixée par l'opérateur de la centrale, on co
 \frac{2 H s}{\Omega_{0}} \frac{d^2 \theta}{dt^2} + \sum_j b_{ij}\sin(\theta_i-\theta_j) = p_{m}
 ```
 
-## Nœuds de charge
+### Nœuds de charge
 
 Pour l'instant, on ne modélise pas leur dynamique.
 
-# Linéarisation
+## Linéarisation
 
 On suppose un fonctionnement en régime permanent $`\theta_i^*`$, $`p_i^*`$ perturbé au temps $`t = 0`$ par la perte de puissance sur certains générateurs $`p_{m}(t) = p_{m}^* + \mathbb{1}_{t>0}\Delta p`$
 
@@ -160,7 +164,7 @@ On obtient
 = \Delta p_i
 ```
 
-## Laplacien linéarisé
+### Laplacien linéarisé
 
 Remarquons que le terme $`j = i`$ de la somme est nul, on peut donc s'en passer et réécrire la somme sous forme matricielle avec le laplacien $`L(\theta^*)`$ défini par :
 
@@ -177,7 +181,7 @@ Ainsi :
 M\ddot\delta+ L(\theta^*)\delta = \Delta p
 ```
 
-# Analyse modale
+## Analyse modale
 
 On cherche à résoudre
 
@@ -193,7 +197,7 @@ m_i = \frac{2}{\Omega_0}\sum_{k \in i} H_k s_k
 
 Comme $`L`$ est symétrique réelle, on serait tenté de la diagonaliser, $`L = U\Lambda U^T`$, et de projeter sur ses vecteurs propres. Mais cela ne découple pas les équations : $`U^T M U`$ n'est pas diagonale, sauf si toutes les inerties sont égales ($`M \propto I`$). Il faut donc diagonaliser $`L`$ et $`M`$ simultanément. Pour cela, on s'occupe d'abord des nœuds sans inertie.
 
-## Nœuds sans inertie : réduction de Kron
+### Nœuds sans inertie : réduction de Kron
 
 Les nœuds de charge, ainsi que les nœuds dont la production passe uniquement par de l'électronique de puissance (éolien, solaire, batteries), ont $`m_i = 0`$. Leur équation n'a pas de terme dynamique : elle devient une contrainte algébrique. On sépare les nœuds en deux groupes, avec inertie ($`g`$) et sans inertie ($`l`$) :
 
@@ -228,11 +232,11 @@ avec
 \end{aligned}
 ```
 
-$`L_{red}`$ (complément de Schur de $`L$) est encore un laplacien : symétrique, semi-définie positive, de lignes de somme nulle. Elle décrit un réseau équivalent ne contenant que les nœuds avec inertie (Kron reduction du graphe).
+$`L_{red}`$ (complément de Schur de $`L_{ll}`$ dans $`L`$) est encore un laplacien : symétrique, semi-définie positive, de lignes de somme nulle. Elle décrit un réseau équivalent ne contenant que les nœuds avec inertie (Kron reduction du graphe).
 
 Voir [Kron Reduction of Graphs with Applications to Electrical Networks](http://arxiv.org/abs/1102.2950)
 
-## Problème aux valeurs propres généralisé
+### Problème aux valeurs propres généralisé
 
 On résout
 
@@ -240,20 +244,32 @@ On résout
 L_{red}\, v_k = \lambda_k M_g v_k
 ```
 
-Comme $`L_{red}`$ est symétrique et $`M_g`$ diagonale définie positive, les valeurs propres $`\lambda_k`$ sont réelles et positives, et les vecteurs propres peuvent être choisis $`M_g`$-orthonormés. En notant $`V = (v_0, v_1, \dots)`$ :
+Comme $`L_{red}`$ est symétrique et $`M_g`$ diagonale définie positive, les valeurs propres $`\lambda_k`$ sont réelles et positives, et les vecteurs propres peuvent être choisis $`M_g`$-orthonormés. En notant $`V = (v_0, v_1, \dots)`$ et $`\Lambda = \text{diag}(\lambda_k)`$ :
 
 ```math
-V V^T = M_g, \qquad L_{red} = V \Lambda V^T
+V^T M_g V = I, \qquad V^T L_{red} V = \Lambda
 ```
 
 Le réseau étant connexe, une seule valeur propre est nulle : $`\lambda_0 = 0`$, associée au vecteur uniforme $`v_0 = \mathbb{1}/\sqrt{\sum_g m_g}`$.
 
-## Coordonnées modales
+### Coordonnées modales
 
-En posant $`\hat \delta_g = V^T \delta_g`$, soit $`\delta_g = V M_g \hat \delta_g`$, et en multipliant l'équation réduite à gauche par $`V^T`$, on obtient des oscillateurs indépendants :
+On divise l'équation réduite par les inerties pour faire apparaître l'accélération angulaire imposée par la perturbation, $`a = M_g^{-1}\Delta p_{red} \space [\text{rad/s}^2]`$ :
 
 ```math
-\ddot {\hat \delta_k} + \lambda_k \hat \delta_k = \widehat{\Delta p}_k, \qquad \widehat{\Delta p} = V^T \Delta p_{red}
+\ddot\delta_g + M_g^{-1}L_{red}\,\delta_g = a
+```
+
+On passe en coordonnées modales en appliquant à tout vecteur nodal $`x`$ la même transformation :
+
+```math
+\hat x = V^T M_g\, x, \qquad x = V \hat x \qquad (\text{car } V^{-1} = V^T M_g)
+```
+
+Appliquée aux deux membres, avec $`V^T M_g M_g^{-1} L_{red} V = V^T L_{red} V = \Lambda`$, elle donne des oscillateurs indépendants :
+
+```math
+\ddot {\hat \delta}_k + \lambda_k \hat \delta_k = \hat a_k, \qquad \hat a = V^T M_g\, a = V^T \Delta p_{red}
 ```
 
 Chaque mode $`k \geq 1`$ oscille à la pulsation $`\omega_k = \sqrt{\lambda_k}`$, soit à la fréquence
@@ -262,18 +278,18 @@ Chaque mode $`k \geq 1`$ oscille à la pulsation $`\omega_k = \sqrt{\lambda_k}`$
 f_k = \frac{\sqrt{\lambda_k}}{2\pi}
 ```
 
-## Réponse à un échelon de puissance
+### Réponse à un échelon de puissance
 
 Pour $`\Delta p`$ constant à partir de $`t = 0`$ et un réseau initialement à l'équilibre :
 
 ```math
 \begin{aligned}
-&\hat \delta_0(t) = \widehat{\Delta p}_0 \, \frac{t^2}{2} \\
-&\hat \delta_k(t) = \frac{\widehat{\Delta p}_k}{\lambda_k}\left(1 - \cos\sqrt{\lambda_k} t\right), \qquad k \geq 1
+&\hat \delta_0(t) = \hat a_0 \, \frac{t^2}{2} \\
+&\hat \delta_k(t) = \frac{\hat a_k}{\lambda_k}\left(1 - \cos\sqrt{\lambda_k} t\right), \qquad k \geq 1
 \end{aligned}
 ```
 
-On revient ensuite aux nœuds avec $`\delta_g = V M_g \hat \delta_g`$, puis aux nœuds sans inertie avec la relation de Kron. L'écart de fréquence au nœud $`i`$ est
+On revient ensuite aux nœuds avec $`\delta_g = V \hat \delta`$, puis aux nœuds sans inertie avec la relation de Kron. L'écart de fréquence au nœud $`i`$ est
 
 ```math
 \Delta f_i = \frac{1}{2\pi}\frac{d\delta_i}{dt}
@@ -285,6 +301,6 @@ Pour un nœud générateur $`g`$ :
 \begin{aligned}
 \Delta f_g(t)
 &= \frac{1}{2\pi}\sum_k v_{gk} \frac{d\hat \delta_k}{dt} \\
-&= \frac{1}{2\pi} \left( \widehat{\Delta p}_0 t . v_0 + \sum_{k \geq 1} v_{gk} \frac{\widehat{\Delta p}_k}{\sqrt{\lambda_k}}\sin\sqrt{\lambda_k} t \right)
+&= \frac{1}{2\pi} \left( v_{g0} \, \hat a_0 \, t + \sum_{k \geq 1} v_{gk} \frac{\hat a_k}{\sqrt{\lambda_k}}\sin\sqrt{\lambda_k} t \right)
 \end{aligned}
 ```
