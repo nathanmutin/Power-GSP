@@ -173,4 +173,5 @@ def draw_graph_signals_area(ax, grid, values, shapes):
     """Signal sur les nœuds du réseau, représenté par la surface des nœuds (proportionnelle à |valeur|)."""
     draw_graph(ax, grid, shapes)
     values = np.abs(grid.to_array(values))
+    # s is an area in points^2
     ax.scatter(grid.buses.x, grid.buses.y, s=100 * values / values.max(), zorder=2)

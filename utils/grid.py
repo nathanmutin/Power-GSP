@@ -34,7 +34,7 @@ class Grid:
     Attributes:
         buses (pd.DataFrame): Un nœud par ligne, index = identifiant du bus.
             Colonnes : x (longitude), y (latitude), country,
-            puis S, E, H après add_inertia.
+            puis S, S_sync, E, H après add_inertia.
         branches (pd.DataFrame): Une arête par ligne, colonnes bus0, bus1 et b (susceptance 1/x_pu).
             Les lignes et transformateurs en parallèle sont regroupés : leurs b s'additionnent.
     """
@@ -88,6 +88,7 @@ class Grid:
         Calcule l'inertie par nœud à partir des centrales qui y sont raccordées.
         Ajoute à self.buses les colonnes :
         - 'S' : capacité installée totale (MW)
+        - 'S_sync' : capacité des centrales synchrones, H > 0 (MW)
         - 'E' : énergie cinétique stockée, somme des H_i * S_i (MW·s)
         - 'H' : constante d'inertie équivalente E / S (s), 0 s'il n'y a aucune centrale
 
@@ -96,14 +97,16 @@ class Grid:
         plants = pd.read_csv(path_to_powerplants_csv)
         plants["H"] = get_inertia_constants(plants.Technology, plants.Fueltype)
         plants["E"] = plants.H * plants.Capacity
+        plants["S_sync"] = plants.Capacity.where(plants.H > 0, 0.0)
 
         in_grid = plants.bus.isin(self.buses.index)
         print(f"{(~in_grid).sum()} centrales hors du réseau ignorées "
               f"({plants.Capacity[~in_grid].sum() / 1e3:.0f} GW)")
-        per_bus = (plants[in_grid].groupby("bus")[["Capacity", "E"]].sum()
+        per_bus = (plants[in_grid].groupby("bus")[["Capacity", "S_sync", "E"]].sum()
                    .reindex(self.buses.index, fill_value=0.0))
 
         self.buses["S"] = per_bus.Capacity
+        self.buses["S_sync"] = per_bus.S_sync
         self.buses["E"] = per_bus.E
         self.buses["H"] = (per_bus.E / per_bus.Capacity).where(per_bus.Capacity > 0, 0.0)
         # Les modes dépendent de M
@@ -153,8 +156,10 @@ class Grid:
             δ_l   = L_ll⁻¹ (ΔP_l − L_lg δ_g)
             L_red = L_gg − L_gl L_ll⁻¹ L_lg          (laplacien réduit)
             P_red = ΔP_g − L_gl L_ll⁻¹ ΔP_l          (perturbation reportée sur les nœuds avec inertie)
-        Le système réduit M_g δ_g'' + L_red δ_g = P_red est diagonalisé par le problème aux valeurs
-        propres généralisé L_red v = λ M_g v, dont les modes vérifient Vᵀ M_g V = I et Vᵀ L_red V = Λ.
+        Le système réduit M_g δ_g'' + L_red δ_g = P_red se ramène au problème aux valeurs propres
+        standard de A = M_g^{-1/2} L_red M_g^{-1/2} (symétrique, semi-définie positive) :
+            A V = V Λ,   Vᵀ V = I
+        et se découple en coordonnées modales δ̂ = Vᵀ M_g^{1/2} δ_g (voir docs/analyse_spectrale.md).
 
         Calculé une fois, au premier accès (vidé par invalidate_cache, appelée par add_inertia).
         """
@@ -170,14 +175,20 @@ class Grid:
 
         L_red = L_gg.toarray() - L_gl @ kron
         L_red = (L_red + L_red.T) / 2   # symétrique aux erreurs d'arrondi près
-        eigenvalues, modes = sla.eigh(L_red, np.diag(m[g]))
+        inv_sqrt_m = 1 / np.sqrt(m[g])  # diagonale de M_g^{-1/2}
+        A = inv_sqrt_m[:, None] * L_red * inv_sqrt_m[None, :]
+        eigenvalues, modes = sla.eigh(A)
         # Le réseau est connexe : une seule valeur propre nulle (≈ 1e-8 par erreurs d'arrondi)
         if not (eigenvalues[1] > 1e3 * abs(eigenvalues[0])):
             raise ValueError("Le mode 0 n'est pas isolé : le réseau réduit n'est pas connexe ?")
         eigenvalues[0] = 0.0
 
-        return {"inertial": g, "eigenvalues": eigenvalues, "modes": modes,
-                "lu_ll": lu_ll, "kron": kron, "L_gl": L_gl}
+        # Formes des modes en angle : M_g^{-1/2} V, prolongées aux nœuds sans inertie par Kron
+        shapes = np.empty((len(m), len(eigenvalues)))
+        shapes[g] = inv_sqrt_m[:, None] * modes
+        shapes[l] = -kron @ shapes[g]
+        return {"inertial": g, "eigenvalues": eigenvalues, "modes": modes, "inv_sqrt_m": inv_sqrt_m,
+                "lu_ll": lu_ll, "kron": kron, "L_gl": L_gl, "shapes": shapes}
 
     @property
     def inertial(self) -> np.ndarray:
@@ -187,14 +198,17 @@ class Grid:
     @property
     def eigenvalues(self) -> np.ndarray:
         """
-        λ_k (1/s²) du problème L_red v = λ M_g v, pulsation ω_k = √λ_k.
+        λ_k (1/s²), valeurs propres de A = M_g^{-1/2} L_red M_g^{-1/2}, pulsation ω_k = √λ_k.
         λ_0 = 0 : mode du centre d'inertie (tout le réseau accélère ensemble).
         """
         return self._modes_computation["eigenvalues"]
 
     @property
     def modes(self) -> np.ndarray:
-        """V (nœuds avec inertie x modes), M_g-orthonormés."""
+        """
+        V (nœuds avec inertie x modes) : vecteurs propres orthonormés de A (Vᵀ V = I), sans dimension.
+        Les formes des modes en angle sont M_g^{-1/2} V (voir mode_shapes).
+        """
         return self._modes_computation["modes"]
 
     @property
@@ -202,12 +216,24 @@ class Grid:
         """Fréquences propres des modes (Hz)."""
         return np.sqrt(self.eigenvalues) / (2 * np.pi)
 
+    @property
+    def mode_shapes(self) -> np.ndarray:
+        """
+        Φ (bus x modes) : modes prolongés à tous les bus, dans l'ordre de buses.
+        Nœuds avec inertie : Φ_g = M_g^{-1/2} V ; sans inertie : Φ_l = −L_ll⁻¹ L_lg Φ_g (relation de Kron).
+
+        Φ sert à la fois à l'observation et à l'excitation (réciprocité, L symétrique) :
+            Δf = 1/2π · Φ δ̂'         (sur tous les bus)
+            â  = Φᵀ ΔP                (projection d'une perturbation sur les modes)
+        """
+        return self._modes_computation["shapes"]
+
     def step_response(self, delta_P, t) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Réponse à un échelon de puissance ΔP appliqué à t = 0, à partir de l'équilibre (δ = δ' = 0).
 
-        En coordonnées modales δ̂ = Vᵀ M_g δ_g, chaque mode est un oscillateur δ̂_k'' + λ_k δ̂_k = â_k,
-        avec â = Vᵀ M_g a = Vᵀ P_red (a = M_g⁻¹ P_red, accélération imposée) :
+        En coordonnées modales δ̂ = Vᵀ M_g^{1/2} δ_g, chaque mode est un oscillateur δ̂_k'' + λ_k δ̂_k = â_k,
+        avec â = Vᵀ M_g^{1/2} a = Vᵀ M_g^{-1/2} P_red (a = M_g⁻¹ P_red, accélération imposée) :
             mode 0     : δ̂_0 = â_0 t² / 2                       (dérive du centre d'inertie)
             modes k ≥ 1 : δ̂_k = â_k / λ_k · (1 − cos ω_k t)
 
@@ -228,7 +254,7 @@ class Grid:
 
         # Perturbation reportée sur les nœuds avec inertie, puis projetée sur les modes
         Lll_inv_P_l = s["lu_ll"].solve(dP[l])
-        a_hat = s["modes"].T @ (dP[g] - s["L_gl"] @ Lll_inv_P_l)
+        a_hat = s["modes"].T @ (s["inv_sqrt_m"] * (dP[g] - s["L_gl"] @ Lll_inv_P_l))
 
         lam = s["eigenvalues"][1:, None]
         omega = np.sqrt(lam)
@@ -241,7 +267,9 @@ class Grid:
 
         delta = np.empty((len(dP), len(t)))
         speed = np.empty((len(dP), len(t)))
-        delta[g], speed[g] = s["modes"] @ d_hat, s["modes"] @ dd_hat
+        # Retour aux nœuds : δ_g = M_g^{-1/2} V δ̂
+        delta[g] = s["inv_sqrt_m"][:, None] * (s["modes"] @ d_hat)
+        speed[g] = s["inv_sqrt_m"][:, None] * (s["modes"] @ dd_hat)
         # Nœuds sans inertie : relation algébrique (ΔP constant pour t > 0)
         delta[l] = Lll_inv_P_l[:, None] - s["kron"] @ delta[g]
         speed[l] = -s["kron"] @ speed[g]
