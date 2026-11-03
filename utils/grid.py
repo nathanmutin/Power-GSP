@@ -1,47 +1,24 @@
-"""Réseau électrique sous forme de tableaux indexés par bus."""
-
-from functools import cached_property
-from pathlib import Path
-
-import networkx as nx
 import numpy as np
-import pandas as pd
 import pypsa
-import scipy.linalg as sla
+import pandas as pd
+from pathlib import Path
+from functools import cached_property
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import scipy.linalg as sla
 
 from utils import paths
-from utils.inerties import get_inertia_constants
 from utils.network import remove_non_synchronous_areas
+from utils.inerties import get_inertia_constants
 
 F_NOMINAL = 50.0                    # Fréquence nominale (Hz)
 OMEGA_S = 2 * np.pi * F_NOMINAL     # Pulsation synchrone (rad/s)
 
 
 class Grid:
-    """
-    Réseau électrique vu comme un graphe pondéré.
-
-    L'index de `buses` fixe l'ordre des nœuds : les matrices (incidence, laplacien, inertie)
-    et les signaux sous forme de np.ndarray suivent tous cet ordre.
-    Les matrices et les modes sont mis en cache : après toute modification de `buses`
-    ou `branches`, appeler invalidate_cache().
-
-    Unités : PyPSA exprime x_pu sur une base de 1 MVA, donc b = 1/x_pu est en MW/rad
-    et les puissances (ΔP...) sont en MW.
-
-    Attributes:
-        buses (pd.DataFrame): Un nœud par ligne, index = identifiant du bus.
-            Colonnes : x (longitude), y (latitude), country,
-            puis S, S_sync, E, H après add_inertia.
-        branches (pd.DataFrame): Une arête par ligne, colonnes bus0, bus1 et b (susceptance 1/x_pu).
-            Les lignes et transformateurs en parallèle sont regroupés : leurs b s'additionnent.
-    """
-
     def __init__(self,
-                 network_path: Path = paths.CLUSTERED_NETWORK,
-                 powerplants_path: Path = paths.POWERPLANTS):
+                network_path: Path = paths.CLUSTERED_NETWORK,
+                powerplants_path: Path = paths.POWERPLANTS):
         """
         Chaîne complète : chargement du réseau PyPSA, retrait des zones non synchrones,
         construction du graphe, puis calcul des inerties.
@@ -49,21 +26,30 @@ class Grid:
         n = remove_non_synchronous_areas(pypsa.Network(network_path))
         self.buses, self.branches = self._df_from_pypsa(n)
         self.add_inertia(powerplants_path)
+        
+        self.rayleigh_alpha = 0
+        self.rayleigh_beta = 0
 
-    @classmethod
-    def from_df(cls, buses: pd.DataFrame, branches: pd.DataFrame) -> "Grid":
-        """Grid construit directement à partir des tableaux (sans inerties sauf colonne E fournie)."""
-        grid = cls.__new__(cls)   # contourne __init__, qui lit les fichiers
-        grid.buses, grid.branches = buses, branches
-        return grid
-
-    @classmethod
-    def from_pypsa(cls, n: pypsa.Network) -> "Grid":
+    def invalidate_cache(self):
         """
-        Grid construit à partir d'un réseau PyPSA déjà chargé (sans inerties : appeler add_inertia).
-        Le réseau n'est pas modifié, hors calcul de ses valeurs dépendantes (x_pu).
+        Plusieurs properties sont calculées la première fois qu'on y accède et mises en cache.
+        Cette fonction supprime le cache.
+        Par exemple, après avoir modifié les inerties, il faut recalculer les modes.
         """
-        return cls.from_df(*cls._df_from_pypsa(n))
+        for name in self.__class__.__dict__:
+            self.invalidate_cached_property(name)
+    
+    def invalidate_cached_property(self, property_name: str):
+        """
+        Supprime le cache d'une propriété calculée la première fois qu'on y accède.
+        Par exemple, après avoir modifié les inerties, il faut recalculer les modes.
+        """
+        attr = getattr(self.__class__, property_name)
+        if isinstance(attr, cached_property):
+            try:
+                delattr(self, property_name)
+            except AttributeError:
+                pass
 
     @staticmethod
     def _df_from_pypsa(n: pypsa.Network) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -82,6 +68,23 @@ class Grid:
         branches = (branches.assign(b=1 / branches.x_pu)
                     .groupby(["bus0", "bus1"], as_index=False).b.sum())
         return buses, branches
+    
+    def to_array(self, series: pd.Series) -> np.ndarray:
+        """
+        Convertit une pd.Series indexée par bus en np.ndarray dans l'ordre de self.buses.index.
+        """
+        # If already a numpy array of the right length, return it
+        if isinstance(series, np.ndarray):
+            if len(series) != len(self.buses):
+                raise ValueError(f"Le tableau numpy a une longueur de {len(series)}, mais le réseau a {len(self.buses)} buses.")
+            return series
+            
+        
+        missing = self.buses.index.difference(series.index)
+        if len(missing):
+            raise ValueError(f"{len(missing)} bus absents du signal, "
+                                f"par ex. {list(missing[:5])}")
+        return series.reindex(self.buses.index).to_numpy()
 
     def add_inertia(self, path_to_powerplants_csv: Path):
         """
@@ -94,6 +97,9 @@ class Grid:
 
         Les centrales dont le bus n'est pas dans le réseau (zones non synchrones) sont ignorées.
         """
+        # Première chose à faire
+        self.invalidate_cache()
+        
         plants = pd.read_csv(path_to_powerplants_csv)
         plants["H"] = get_inertia_constants(plants.Technology, plants.Fueltype)
         plants["E"] = plants.H * plants.Capacity
@@ -109,13 +115,6 @@ class Grid:
         self.buses["S_sync"] = per_bus.S_sync
         self.buses["E"] = per_bus.E
         self.buses["H"] = (per_bus.E / per_bus.Capacity).where(per_bus.Capacity > 0, 0.0)
-        # Les modes dépendent de M
-        self.invalidate_cache()
-
-    def invalidate_cache(self):
-        """Vide les matrices et modes mis en cache. À appeler après toute modification de buses ou branches."""
-        for name in ("incidence", "L", "_modes_computation"):
-            self.__dict__.pop(name, None)
 
     @cached_property
     def incidence(self) -> sp.csr_array:
@@ -124,9 +123,17 @@ class Grid:
         i1 = self.buses.index.get_indexer(self.branches.bus1)
         if (i0 < 0).any() or (i1 < 0).any():
             raise ValueError("Certaines branches sont raccordées à un bus absent de `buses`.")
+        
+        # Pour construire une matrice sparse il faut fournir:
+        # data, row_ind and col_ind tels que
+        # a[row_ind[k], col_ind[k]] = data[k]
         rows = np.arange(len(self.branches))
+        # la première moitié des k correspond à +1 (bus0),
+        # la deuxième moitié à -1 (bus1)
+        row_ind = np.r_[rows, rows]
+        col_ind = np.r_[i0, i1]
         data = np.r_[np.ones(len(rows)), -np.ones(len(rows))]
-        return sp.csr_array((data, (np.r_[rows, rows], np.r_[i0, i1])),
+        return sp.csr_array((data, (row_ind, col_ind)),
                             shape=(len(self.branches), len(self.buses)))
 
     @cached_property
@@ -135,17 +142,47 @@ class Grid:
         K = self.incidence
         return (K.T @ sp.diags_array(self.branches.b.to_numpy()) @ K).tocsr()
 
-    @property
+    @cached_property
     def M(self) -> sp.dia_array:
         """
         Matrice d'inertie diagonale M = diag(2 E / ω_s) (bus x bus), en MW·s²/rad.
-        Cohérente avec L dans l'équation d'oscillation M δ'' + L δ = ΔP.
-        Non mise en cache : suit toujours la colonne E de buses.
         """
         if "E" not in self.buses:
             raise AttributeError("Inerties absentes : appeler add_inertia d'abord.")
         return sp.diags_array(2 * self.buses.E.to_numpy() / OMEGA_S)
-
+    
+    @cached_property
+    def lu_L_ll(self) -> spla.SuperLU:
+        """
+        Factorisation LU de L_ll (nœuds sans inertie) pour la réduction de Kron.
+        """
+        m = self.M.diagonal()
+        l = (m == 0)
+        L_ll = self.L[l, :][:, l]
+        return spla.splu(sp.csc_array(L_ll))
+    
+    @cached_property
+    def L_reduced(self) -> sp.csr_array:
+        """
+        Laplacien réduit L_red = L_gg − L_gl L_ll⁻¹ L_lg (nœuds avec inertie).
+        """
+        m = self.M.diagonal()
+        g = (m > 0)
+        l = ~g
+        L_gg, L_gl = self.L[g, :][:, g], self.L[g, :][:, l]
+        return L_gg - L_gl @ self.lu_L_ll.solve(L_gl.toarray().T)
+    
+    def l_from_g_values(self, g_nodes: np.ndarray) -> np.ndarray:
+        """
+        Pour un vecteur de valeurs sur les nœuds avec inertie, calcule les valeurs correspondantes
+        sur les nœuds sans inertie par réduction de Kron : x_l = L_ll⁻¹ (−L_lg x_g).
+        """
+        m = self.M.diagonal()
+        g = (m > 0)
+        l = ~g
+        L_lg = self.L[l, :][:, g]
+        return -self.lu_L_ll.solve(L_lg @ g_nodes)
+    
     @cached_property
     def _modes_computation(self) -> dict:
         """
@@ -161,39 +198,34 @@ class Grid:
             A V = V Λ,   Vᵀ V = I
         et se découple en coordonnées modales δ̂ = Vᵀ M_g^{1/2} δ_g (voir docs/analyse_spectrale.md).
 
-        Calculé une fois, au premier accès (vidé par invalidate_cache, appelée par add_inertia).
+        Calculé une fois, au premier accès
         """
         m = self.M.diagonal()
+        # Indices des nœuds avec et sans inertie, g et l
         g = m > 0
         l = ~g
-
-        L = self.L
-        L_gg, L_gl = L[g][:, g], L[g][:, l]
-        # Factorisation de L_ll réutilisée pour chaque perturbation
-        lu_ll = spla.splu(L[l][:, l].tocsc())
-        kron = lu_ll.solve(L[l][:, g].toarray())    # L_ll⁻¹ L_lg
-
-        L_red = L_gg.toarray() - L_gl @ kron
-        L_red = (L_red + L_red.T) / 2   # symétrique aux erreurs d'arrondi près
+        
         inv_sqrt_m = 1 / np.sqrt(m[g])  # diagonale de M_g^{-1/2}
-        A = inv_sqrt_m[:, None] * L_red * inv_sqrt_m[None, :]
-        eigenvalues, modes = sla.eigh(A)
+        # A = M_g^{-1/2} L_red M_g^{-1/2}
+        A = inv_sqrt_m[:, None] * self.L_reduced * inv_sqrt_m[None, :]
+        A = (A + A.T) / 2   # symétrique aux erreurs d'arrondi près
+        # Résolution du problème aux valeurs propres standard pour A symétrique
+        lambdas, V = sla.eigh(A)
+    
         # Le réseau est connexe : une seule valeur propre nulle (≈ 1e-8 par erreurs d'arrondi)
-        if not (eigenvalues[1] > 1e3 * abs(eigenvalues[0])):
+        if not (lambdas[1] > 1e3 * abs(lambdas[0])):
             raise ValueError("Le mode 0 n'est pas isolé : le réseau réduit n'est pas connexe ?")
-        eigenvalues[0] = 0.0
+        lambdas[0] = 0.0
+        
+        V_full = np.empty((len(m), len(lambdas)))
+        V_full[g,:] = V
+        V_full[l,:] = self.l_from_g_values(V)
 
-        # Formes des modes en angle : M_g^{-1/2} V, prolongées aux nœuds sans inertie par Kron
-        shapes = np.empty((len(m), len(eigenvalues)))
-        shapes[g] = inv_sqrt_m[:, None] * modes
-        shapes[l] = -kron @ shapes[g]
-        return {"inertial": g, "eigenvalues": eigenvalues, "modes": modes, "inv_sqrt_m": inv_sqrt_m,
-                "lu_ll": lu_ll, "kron": kron, "L_gl": L_gl, "shapes": shapes}
-
-    @property
-    def inertial(self) -> np.ndarray:
-        """Masque booléen des nœuds avec inertie (M > 0), dans l'ordre de buses."""
-        return self._modes_computation["inertial"]
+        # Formes des modes en angle : M_g^{1/2} V, prolongées aux nœuds sans inertie par Kron
+        phis = np.empty((len(m), len(lambdas)))
+        phis[g] = inv_sqrt_m[:, None] * V
+        phis[l] = self.l_from_g_values(phis[g])
+        return {"lambdas": lambdas, "V": V, "V_full": V_full, "phis": phis}
 
     @property
     def eigenvalues(self) -> np.ndarray:
@@ -201,99 +233,67 @@ class Grid:
         λ_k (1/s²), valeurs propres de A = M_g^{-1/2} L_red M_g^{-1/2}, pulsation ω_k = √λ_k.
         λ_0 = 0 : mode du centre d'inertie (tout le réseau accélère ensemble).
         """
-        return self._modes_computation["eigenvalues"]
+        return self._modes_computation["lambdas"]
+    
+    @property
+    def pulsations(self) -> np.ndarray:
+        """
+        ω_k = √λ_k (rad/s), pulsations propres du système linéarisé sans amortissement.
+        ω_0 = 0 : mode du centre d'inertie (tout le réseau accélère ensemble).
+        """
+        return np.sqrt(self.eigenvalues)
+    
+    @property
+    def frequencies(self) -> np.ndarray:
+        """
+        f_k = ω_k / (2π) (Hz), fréquences propres du système linéarisé sans amortissement.
+        f_0 = 0 : mode du centre d'inertie (tout le réseau accélère ensemble).
+        """
+        return self.pulsations / (2 * np.pi)
+    
+    @property
+    def eigenvectors(self) -> np.ndarray:
+        """
+        V_k, vecteurs propres de A = M_g^{-1/2} L_red M_g^{-1/2}, normalisés Vᵀ V = I.
+        """
+        return self._modes_computation["V"]
 
+    @property
+    def full_eigenvectors(self) -> np.ndarray:
+        return self._modes_computation["V_full"]
+    
     @property
     def modes(self) -> np.ndarray:
         """
-        V (nœuds avec inertie x modes) : vecteurs propres orthonormés de A (Vᵀ V = I), sans dimension.
-        Les formes des modes en angle sont M_g^{-1/2} V (voir mode_shapes).
+        φ_k, formes des modes en angle, prolongées aux nœuds sans inertie par Kron.
         """
-        return self._modes_computation["modes"]
-
-    @property
-    def frequencies(self) -> np.ndarray:
-        """Fréquences propres des modes (Hz)."""
-        return np.sqrt(self.eigenvalues) / (2 * np.pi)
-
-    @property
-    def mode_shapes(self) -> np.ndarray:
+        return self._modes_computation["phis"]
+    
+    def set_rayleigh_coefficients(self, alpha: float, beta: float):
         """
-        Φ (bus x modes) : modes prolongés à tous les bus, dans l'ordre de buses.
-        Nœuds avec inertie : Φ_g = M_g^{-1/2} V ; sans inertie : Φ_l = −L_ll⁻¹ L_lg Φ_g (relation de Kron).
-
-        Φ sert à la fois à l'observation et à l'excitation (réciprocité, L symétrique) :
-            Δf = 1/2π · Φ δ̂'         (sur tous les bus)
-            â  = Φᵀ ΔP                (projection d'une perturbation sur les modes)
+        Coefficients α et β de l'amortissement de Rayleigh ζ_k = α / (2 ω_k) + β ω_k / 2
         """
-        return self._modes_computation["shapes"]
-
-    def step_response(self, delta_P, t) -> tuple[pd.DataFrame, pd.DataFrame]:
+        # remove cached damping_ratios if they exist
+        self.invalidate_cached_property("damping_ratios")
+        self.invalidate_cached_property("D_reduced")
+        self.rayleigh_alpha = alpha
+        self.rayleigh_beta = beta
+    
+    @cached_property
+    def damping_ratios(self) -> np.ndarray:
         """
-        Réponse à un échelon de puissance ΔP appliqué à t = 0, à partir de l'équilibre (δ = δ' = 0).
-
-        En coordonnées modales δ̂ = Vᵀ M_g^{1/2} δ_g, chaque mode est un oscillateur δ̂_k'' + λ_k δ̂_k = â_k,
-        avec â = Vᵀ M_g^{1/2} a = Vᵀ M_g^{-1/2} P_red (a = M_g⁻¹ P_red, accélération imposée) :
-            mode 0     : δ̂_0 = â_0 t² / 2                       (dérive du centre d'inertie)
-            modes k ≥ 1 : δ̂_k = â_k / λ_k · (1 − cos ω_k t)
-
-        Args:
-            delta_P: Perturbation (MW) par nœud, pd.Series indexée par bus ou tableau dans l'ordre de buses.
-                Négative pour une perte de production.
-            t (np.ndarray): Instants (s).
-
-        Returns:
-            (delta, freq): DataFrames bus x instants : écart d'angle δ (rad)
-            et écart de fréquence Δf = δ' / 2π (Hz).
+        ζ_k, coefficients d'amortissement de Rayleigh pour chaque mode.
+        Pas d'amortissement pour le mode 0 (centre d'inertie) : ζ_0 = 0.
         """
-        s = self._modes_computation
-        g = s["inertial"]
-        l = ~g
-        dP = self.to_array(delta_P).astype(float)
-        t = np.asarray(t, dtype=float)
-
-        # Perturbation reportée sur les nœuds avec inertie, puis projetée sur les modes
-        Lll_inv_P_l = s["lu_ll"].solve(dP[l])
-        a_hat = s["modes"].T @ (s["inv_sqrt_m"] * (dP[g] - s["L_gl"] @ Lll_inv_P_l))
-
-        lam = s["eigenvalues"][1:, None]
-        omega = np.sqrt(lam)
-        d_hat = np.empty((len(a_hat), len(t)))
-        dd_hat = np.empty((len(a_hat), len(t)))
-        d_hat[0] = a_hat[0] * t**2 / 2
-        dd_hat[0] = a_hat[0] * t
-        d_hat[1:] = a_hat[1:, None] / lam * (1 - np.cos(omega * t))
-        dd_hat[1:] = a_hat[1:, None] / omega * np.sin(omega * t)
-
-        delta = np.empty((len(dP), len(t)))
-        speed = np.empty((len(dP), len(t)))
-        # Retour aux nœuds : δ_g = M_g^{-1/2} V δ̂
-        delta[g] = s["inv_sqrt_m"][:, None] * (s["modes"] @ d_hat)
-        speed[g] = s["inv_sqrt_m"][:, None] * (s["modes"] @ dd_hat)
-        # Nœuds sans inertie : relation algébrique (ΔP constant pour t > 0)
-        delta[l] = Lll_inv_P_l[:, None] - s["kron"] @ delta[g]
-        speed[l] = -s["kron"] @ speed[g]
-
-        columns = pd.Index(t, name="t")
-        return (pd.DataFrame(delta, index=self.buses.index, columns=columns),
-                pd.DataFrame(speed / (2 * np.pi), index=self.buses.index, columns=columns))
-
-    def to_array(self, values) -> np.ndarray:
-        """Signal dans l'ordre de buses (accepte une pd.Series indexée par bus ou un tableau)."""
-        if isinstance(values, pd.Series):
-            missing = self.buses.index.difference(values.index)
-            if len(missing):
-                raise ValueError(f"{len(missing)} bus absents du signal, "
-                                 f"par ex. {list(missing[:5])}")
-            return values.reindex(self.buses.index).to_numpy()
-        values = np.asarray(values)
-        if len(values) != len(self.buses):
-            raise ValueError(f"Signal de longueur {len(values)} pour {len(self.buses)} bus.")
-        return values
-
-    def to_networkx(self) -> nx.Graph:
-        """Graphe NetworkX (attribut d'arête 'weight' = b), pour les algorithmes de graphe."""
-        G = nx.Graph()
-        G.add_nodes_from(self.buses.index)
-        G.add_weighted_edges_from(self.branches[["bus0", "bus1", "b"]].itertuples(index=False))
-        return G
+        zeta = np.zeros_like(self.pulsations)
+        oscillating = self.pulsations > 0
+        zeta[oscillating] = self.rayleigh_alpha / (2 * self.pulsations[oscillating]) + self.rayleigh_beta * self.pulsations[oscillating] / 2
+        return zeta
+    
+    @cached_property
+    def D_reduced(self) -> sp.csr_array:
+        """
+        Matrice d'amortissement réduite D_red = alpha M_g + beta L_red (nœuds avec inertie).
+        """
+        Mg = sp.diags_array(self.M.diagonal()[self.M.diagonal() > 0])
+        return self.rayleigh_alpha * Mg + self.rayleigh_beta * self.L_reduced        

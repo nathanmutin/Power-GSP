@@ -120,14 +120,20 @@ On revient ensuite aux nœuds avec $`\delta_g = M_g^{-1/2} V \hat \delta`$, puis
 \Delta f_i = \frac{1}{2\pi}\frac{d\delta_i}{dt}
 ```
 
-Pour un nœud $`i`$ avec inertie :
+Pour un nœud $`i`$ avec $`\Phi_k = M_g^{-1/2} v_k`$ :
 
 ```math
 \begin{aligned}
 \Delta f_i(t)
-&= \frac{1}{2\pi}\sum_k \frac{v_{k, i}}{\sqrt{m_i}} \frac{d\hat \delta_k}{dt} \\
-&= \frac{1}{2\pi} \left( \frac{\sum_j \Delta p_{red,j}}{\sum_j m_j} \, t + \sum_{k \geq 1} \frac{v_{k,i}}{\sqrt{m_i}} \frac{\hat a_k}{\sqrt{\lambda_k}}\sin\sqrt{\lambda_k} t \right)
+&= \frac{1}{2\pi}\sum_k \phi_k \frac{d\hat \delta_k}{dt} \\
+&= \frac{1}{2\pi} \left( \frac{\sum_j \Delta p_{red,j}}{\sum_j m_j} \, t + \sum_{k \geq 1} \phi_k \frac{\hat a_k}{\sqrt{\lambda_k}}\sin\sqrt{\lambda_k} t \right)
 \end{aligned}
 ```
 
-car $`\hat a_0 = v_0^T M_g^{-1/2} \Delta p_{red} = \sum_j \sqrt{\frac{m_j}{\sum_l m_l}}\,\frac{\Delta p_{red,j}}{\sqrt{m_j}} = \frac{\sum_j \Delta p_{red,j}}{\sqrt{\sum_j m_j}}`$ et $`\frac{v_{0,i}}{\sqrt{m_i}} = \frac{1}{\sqrt{\sum_j m_j}}`$ pour tout $`i`$, d'où $`\frac{v_{0,i}}{\sqrt{m_i}}\,\hat a_0 = \frac{\sum_j \Delta p_{red,j}}{\sum_j m_j}`$ : la dérive du centre d'inertie, identique en tout nœud.
+car $`\hat a_0 = v_0^T M_g^{-1/2} \Delta p_{red} = \sum_j \sqrt{\frac{m_j}{\sum_l m_l}}\,\frac{\Delta p_{red,j}}{\sqrt{m_j}} = \frac{\sum_j \Delta p_{red,j}}{\sqrt{\sum_j m_j}}`$ et $`\phi_{0,i} = \frac{v_{0,i}}{\sqrt{m_i}} = \frac{1}{\sqrt{\sum_j m_j}}`$ pour tout $`i`$, d'où $`\phi_{0,i}\,\hat a_0 = \frac{\sum_j \Delta p_{red,j}}{\sum_j m_j}`$ : la dérive du centre d'inertie, identique en tout nœud.
+
+ou  :
+
+```math
+\Delta f_i(t) = \frac{1}{2\pi} \left( \frac{\sum_j \Delta p_{red,j}}{\sum_j m_j} \, t + \sum_{k \geq 1} \Phi_{k,i} \frac{\hat a_k}{\sqrt{\lambda_k}}\sin\sqrt{\lambda_k} t \right)
+```

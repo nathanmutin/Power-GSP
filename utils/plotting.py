@@ -127,7 +127,7 @@ def draw_graph_signals(ax, grid, values, shapes, norm: Normalize = None, cmap='c
     draw_graph(ax, grid, shapes)
     # Une nouvelle normalisation par appel : une CenteredNorm partagée garderait l'échelle du premier signal
     norm = CenteredNorm() if norm is None else norm
-    sc = ax.scatter(grid.buses.x, grid.buses.y, c=grid.to_array(values), norm=norm, cmap=cmap,
+    sc = ax.scatter(grid.buses.x, grid.buses.y, c=values, norm=norm, cmap=cmap,
                     s=2, zorder=2)
     if label is not None:
         ax.figure.colorbar(sc, ax=ax, label=label, shrink=0.6)
@@ -175,3 +175,81 @@ def draw_graph_signals_area(ax, grid, values, shapes):
     values = np.abs(grid.to_array(values))
     # s is an area in points^2
     ax.scatter(grid.buses.x, grid.buses.y, s=100 * values / values.max(), zorder=2)
+
+
+def plot_mode_3d(grid, signal, shapes, mode_index: int = None, title: str = None,
+                  normalize: bool = True):
+    """
+    Vue Plotly 3D d'un signal de mode sur les bus, avec les frontières des pays au niveau z=0.
+
+    Args:
+        grid: Réseau contenant `buses` avec les colonnes `x`, `y` et `country`.
+        signal: Valeurs du signal, dans l'ordre des bus de `grid`.
+        shapes: GeoDataFrame contenant les frontières des pays.
+        mode_index: Indice du mode à afficher dans le titre. Sa fréquence est lue dans `grid`.
+        title: Titre personnalisé, prioritaire sur celui construit avec `mode_index`.
+        normalize: Ramène le signal à une amplitude maximale de 1.
+
+    Returns:
+        plotly.graph_objects.Figure: Figure interactive, à afficher avec `fig.show()`.
+    """
+    import plotly.graph_objects as go
+
+    signal = _bus_signal(grid, signal, normalize)
+    fig = go.Figure([_boundaries_trace(shapes), _bus_trace(grid, signal, normalize)])
+    if title is None:
+        title = f"Mode {mode_index} : {grid.frequencies[mode_index]:.3f} Hz" if mode_index is not None else None
+    fig.update_layout(title=title, scene=_scene_3d(), margin=dict(l=0, r=0, b=0, t=45))
+    return fig
+
+
+def _bus_signal(grid, signal, normalize: bool) -> np.ndarray:
+    """Signal réel, une valeur par bus, éventuellement ramené à une amplitude maximale de 1."""
+    signal = np.asarray(signal, dtype=float).reshape(-1)
+    if len(signal) != len(grid.buses):
+        raise ValueError("Le signal doit contenir une valeur par bus.")
+    if normalize:
+        amplitude = np.max(np.abs(signal))
+        if amplitude == 0:
+            raise ValueError("Impossible de normaliser un signal nul.")
+        signal = signal / amplitude
+    return signal
+
+
+def _boundaries_trace(shapes):
+    """Trace Plotly des frontières des pays au niveau z = 0 (polygones séparés par None)."""
+    import plotly.graph_objects as go
+
+    boundary_x, boundary_y, boundary_z = [], [], []
+    for geometry in shapes.geometry:
+        geometries = geometry.geoms if geometry.geom_type == "MultiPolygon" else (geometry,)
+        for polygon in geometries:
+            coords = list(polygon.exterior.coords)
+            boundary_x.extend([point[0] for point in coords] + [None])
+            boundary_y.extend([point[1] for point in coords] + [None])
+            boundary_z.extend([0] * len(coords) + [None])
+    return go.Scatter3d(x=boundary_x, y=boundary_y, z=boundary_z, mode="lines",
+                        line=dict(color="#888888", width=2), name="Frontières", hoverinfo="skip")
+
+
+def _bus_trace(grid, signal, normalize: bool, amplitude: float = 1.0):
+    """Trace Plotly des bus, hauteur et couleur égales au signal (échelle de couleur fixe ±amplitude)."""
+    import plotly.graph_objects as go
+
+    return go.Scatter3d(
+        x=grid.buses.x, y=grid.buses.y, z=signal, mode="markers",
+        marker=dict(size=4, color=signal, colorscale="RdBu", cmin=-amplitude, cmax=amplitude,
+                    colorbar=dict(title="Signal<br>normalisé" if normalize else "Signal")),
+        customdata=np.column_stack([grid.buses.index, grid.buses.country]),
+        hovertemplate=("Bus: %{customdata[0]}<br>Pays: %{customdata[1]}<br>"
+                       "Signal: %{z:.3f}<extra></extra>"),
+        name="Bus", showlegend=True,
+    )
+
+
+def _scene_3d(z_range=None) -> dict:
+    """Scène 3D sans axes ni fond ; z_range fixe l'axe vertical (indispensable pour une animation)."""
+    hidden = dict(title="", showgrid=False, zeroline=False, showticklabels=False, showbackground=False)
+    zaxis = dict(hidden, range=list(z_range)) if z_range is not None else hidden
+    return dict(xaxis=hidden, yaxis=hidden, zaxis=zaxis,
+                aspectmode="manual", aspectratio=dict(x=1, y=1, z=0.3))

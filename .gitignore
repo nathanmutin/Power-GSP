@@ -10,3 +10,6 @@ __pycache__/
 
 # Animations générées par le notebook
 oscillations.gif
+
+# Figures générées par les scripts
+figures/
