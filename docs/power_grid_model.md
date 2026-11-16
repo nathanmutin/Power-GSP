@@ -7,8 +7,8 @@
 On considère un nœud $`i`$ connecté à ses voisins $`j`$, avec :
 - admittances de ligne $`\underline{Y}_{ij} \space [\Omega^{-1}]`$
 - admittance à la terre $`\underline{Y}_{i0} \space [\Omega^{-1}]`$
-- courant injecté au nœud (production ou consommation) $`\underline{I}_i \space [A]`$
-- tension au nœud $`\underline{V}_i = \mathcal{V}_i e^{j\theta_i} \space [V]`$
+- courant injecté au nœud (production ou consommation) $`\underline{I}_i \space [A_\text{RMS}]`$
+- tension au nœud $`\underline{V}_i = \mathcal{V}_i e^{j\theta_i} \space [V_\text{RMS}]`$
 
 Loi des nœuds, le courant injecté est :
 

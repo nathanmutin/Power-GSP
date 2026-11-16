@@ -1,4 +1,4 @@
-# Réponse d'un système linéaire stationaire à un bruit blanc
+# Réponse d'un système linéaire stationnaire à un bruit blanc
 
 ## Modèle
 
@@ -76,7 +76,7 @@ A P + P A^T + Q = 0
 Comme $`Q \succeq 0`$, ll'existence d'une solution $`P \succeq 0`$ équivaut à la stabilité de $`A`$ (Critère de Liapounov).
 
 
-## Cas de deux systèmes excités par le même bruit blanc
+## Cas de deux systèmes excités par des bruits blancs corrélés
 
 On considère deux systèmes linéaires stables excités par des bruits blancs gaussiens, potentiellement corrélés :
 

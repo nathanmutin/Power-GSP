@@ -56,17 +56,19 @@ class Grid:
         """
         Tableaux buses et branches à partir des bus, lignes et transformateurs d'un réseau PyPSA.
         Les liaisons HVDC (links) ne sont pas prises en compte.
+        Colonnes de branches : bus0, bus1, b (susceptance 1/x_pu, MW/rad) et s_nom (capacité thermique, MVA).
+        Les branches parallèles sont regroupées : leurs b et leurs s_nom s'additionnent.
         """
         n.calculate_dependent_values()
         buses = n.buses[["x", "y", "country"]].copy()
 
-        branches = pd.concat([n.lines[["bus0", "bus1", "x_pu"]],
-                              n.transformers[["bus0", "bus1", "x_pu"]]])
+        columns = ["bus0", "bus1", "x_pu", "s_nom"]
+        branches = pd.concat([n.lines[columns], n.transformers[columns]])
         # Orienter chaque paire de bus dans le même sens pour regrouper les branches parallèles
         swap = branches.bus0 > branches.bus1
         branches.loc[swap, ["bus0", "bus1"]] = branches.loc[swap, ["bus1", "bus0"]].to_numpy()
         branches = (branches.assign(b=1 / branches.x_pu)
-                    .groupby(["bus0", "bus1"], as_index=False).b.sum())
+                    .groupby(["bus0", "bus1"], as_index=False)[["b", "s_nom"]].sum())
         return buses, branches
     
     def to_array(self, series: pd.Series) -> np.ndarray:

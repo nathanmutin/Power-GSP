@@ -133,6 +133,34 @@ def draw_graph_signals(ax, grid, values, shapes, norm: Normalize = None, cmap='c
         ax.figure.colorbar(sc, ax=ax, label=label, shrink=0.6)
     return sc
 
+def draw_edge_signals(ax, grid, values, shapes, norm: Normalize = None, cmap='coolwarm',
+                      label: str = None):
+    """
+    Signal sur les branches du réseau, représenté par la couleur des segments.
+    Si label est donné, ajoute une barre de couleur avec ce titre.
+    Renvoie le LineCollection, utilisable pour une barre commune : fig.colorbar(lc, ax=axes).
+    """
+    base_map(ax, shapes)
+    
+    values_normed = values if norm is None else norm(values)
+    cmap = plt.get_cmap(cmap)
+    
+    draw_branches(ax,
+                  grid.buses,
+                  grid.branches,
+                  color=cmap(values_normed),
+                  linewidth=2.,
+                  zorder=1)
+    ax.set_xlim(grid.buses.x.min() - 1, grid.buses.x.max() + 1)
+    ax.set_ylim(grid.buses.y.min() - 1, grid.buses.y.max() + 1)
+    
+    if label is not None:
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        ax.figure.colorbar(sm, ax=ax, label=label, shrink=0.6)
+    
+    return ax
+
 
 def animate_graph_signals(grid, signals, shapes, norm: Normalize = None, cmap='coolwarm',
                           label: str = None, interval: int = 50, figsize=(8, 6)):
